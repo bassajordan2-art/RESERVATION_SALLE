@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Réservation de Salles & Projecteurs</title>
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- FullCalendar JS -->
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+    
+    <!-- Chart.js (Graphiques) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- jsPDF & AutoTable (Export PDF) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+
+    <style>
+        :root {
+            --primary-color: #0d6efd;
+        }
+        body { background-color: #f8f9fa; }
+        #calendar { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+            height: 600px;
+        }
+        .view-section { display: none; }
+        .view-section.active { display: block; }
+        .status-attente { color: #ffc107; font-weight: bold; }
+        .status-confirme { color: #198754; font-weight: bold; }
+        .status-annule { color: #dc3545; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="#">📅 ResaPro</a>
+            <div class="d-flex">
+                <select id="roleSelector" class="form-select form-select-sm me-2" onchange="switchRole()">
+                    <option value="user">Vue Utilisateur</option>
+                    <option value="admin">Vue Administrateur</option>
+                </select>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container pb-5">
+        <!-- VUE UTILISATEUR -->
+        <div id="userView" class="view-section active">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2>Calendrier des disponibilités</h2>
+                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#bookingModal">
+                    + Nouvelle Réservation
+                </button>
+            </div>
+            <div id="calendar"></div>
+        </div>
+
+        <!-- VUE ADMINISTRATEUR -->
+        <div id="adminView" class="view-section">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2>Administration - Réservations</h2>
+                <div>
+                    <button class="btn btn-outline-success me-2" onclick="exportCSV()">Export CSV</button>
+                    <button class="btn btn-outline-danger" onclick="exportPDF()">Export PDF</button>
+                </div>
+            </div>
+
+            <!-- Graphique Chart.js -->
+            <div class="card shadow-sm mb-4">
+                <div class="card-body">
+                    <h5 class="card-title">Statistiques d'occupation (Heures réservées)</h5>
+                    <div style="height: 300px; display: flex; justify-content: center;">
+                        <canvas id="occupancyChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tableau d'administration (Recherche + Données + Pagination) -->
+            <div class="card shadow-sm mt-3">
+                <div class="card-body">
+                    
+                    <!-- Barre de recherche -->
+                    <div class="row mb-3">
+                        <div class="col-md-5">
+                            <input type="text" id="searchInput" class="form-control" placeholder="🔍 Rechercher par salle ou motif..." oninput="currentPage = 1; updateAdminTable()">
+                        </div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Date & Heure</th>
+                                    <th>Salle</th>
+                                    <th>Projecteur</th>
+                                    <th>Motif</th>
+                                    <th>Statut</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminTableBody">
+                                <!-- Rempli dynamiquement par JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Contrôles de pagination -->
+                    <nav aria-label="Pagination des réservations">
+                        <ul class="pagination justify-content-center mt-4 mb-0" id="paginationControls">
+                            <!-- Rempli dynamiquement par JavaScript -->
+                        </ul>
+                    </nav>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE RÉSERVATION -->
+    <div class="modal fade" id="bookingModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Réserver une ressource</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="bookingForm">
+                        <div class="mb-3">
+                            <label class="form-label">Date</label>
+                            <input type="date" id="bookDate" class="form-control" required>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col">
+                                <label class="form-label">Heure début</label>
+                                <input type="time" id="bookStart" class="form-control" required>
+                            </div>
+                            <div class="col">
+                                <label class="form-label">Heure fin</label>
+                                <input type="time" id="bookEnd" class="form-control" required>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Salle</label>
+                            <select id="bookRoom" class="form-select" required>
+                                <option value="Amphi A">Amphi A (200 places)</option>
+                                <option value="Salle 101">Salle 101 (30 places)</option>
+                                <option value="Salle Réunion">Salle Réunion (10 places)</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Vidéo-projecteur (Optionnel)</label>
+                            <select id="bookProjector" class="form-select">
+                                <option value="">Aucun</option>
+                                <option value="VP-Epson-01">VP Epson 01</option>
+                                <option value="VP-Sony-02">VP Sony 02</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Motif</label>
+                            <input type="text" id="bookReason" class="form-control" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">Soumettre la demande</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS (pour la modal) -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- SCRIPTS METIER (Application Logic) -->
+    <script>
+        /* ==========================================
+           1. INITIALISATION & VARIABLES GLOBALES
+           ========================================== */
+        let reservations = JSON.parse(localStorage.getItem('reservations')) || [];
+        let calendar;
+        let occupancyChart = null;
+        
+        // Variables pour la pagination
+        let currentPage = 1;
+        const itemsPerPage = 5;
+
+        /* ==========================================
+           2. GESTION DU CALENDRIER (FullCalendar)
+           ========================================== */
+        document.addEventListener('DOMContentLoaded', function() {
+            const calendarEl = document.getElementById('calendar');
+            calendar = new FullCalendar.Calendar(calendarEl, {
+                initialView: 'timeGridWeek',
+                headerToolbar: {
+                    left: 'prev,next today',
+                    center: 'title',
+                    right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                },
+                locale: 'fr',
+                slotMinTime: '08:00:00',
+                slotMaxTime: '20:00:00',
+                allDaySlot: false,
+                events: getCalendarEvents()
+            });
+            calendar.render();
+            updateAdminTable();
+        });
+
+        function getCalendarEvents() {
+            return reservations.map(r => ({
+                id: r.id,
+                title: r.room + (r.projector ? ' (+VP)' : '') + ' - ' + r.status,
+                start: r.date + 'T' + r.start,
+                end: r.date + 'T' + r.end,
+                color: r.status === 'En attente' ? '#ffc107' : (r.status === 'Annulé' ? '#dc3545' : '#198754')
+            }));
+        }
+
+        /* ==========================================
+           3. GESTION DES RÉSERVATIONS
+           ========================================== */
+        document.getElementById('bookingForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const newResa = {
+                id: Date.now(),
+                date: document.getElementById('bookDate').value,
+                start: document.getElementById('bookStart').value,
+                end: document.getElementById('bookEnd').value,
+                room: document.getElementById('bookRoom').value,
+                projector: document.getElementById('bookProjector').value,
+                reason: document.getElementById('bookReason').value,
+                status: 'En attente'
+            };
+
+            // Vérification basique des conflits (chevauchement d'heures)
+            const conflit = reservations.find(r => 
+                r.date === newResa.date && 
+                r.room === newResa.room && 
+                r.status !== 'Annulé' &&
+                ((newResa.start >= r.start && newResa.start < r.end) || 
+                 (newResa.end > r.start && newResa.end <= r.end) ||
+                 (newResa.start <= r.start && newResa.end >= r.end))
+            );
+
+            if (conflit) {
+                alert("Erreur : Cette salle est déjà réservée sur ce créneau !");
+                return;
+            }
+
+            reservations.push(newResa);
+            saveData();
+            
+            const modal = bootstrap.Modal.getInstance(document.getElementById('bookingModal'));
+            modal.hide();
+            this.reset();
+            alert("Demande envoyée avec succès !");
+        });
+
+        function saveData() {
+            localStorage.setItem('reservations', JSON.stringify(reservations));
+            
+            // MAJ Calendrier
+            calendar.removeAllEvents();
+            calendar.addEventSource(getCalendarEvents());
+            
+            // MAJ Tableau Admin
+            updateAdminTable();
+        }
+
+        /* ==========================================
+           4. TABLEAU D'ADMINISTRATION (Filtre + Formatage Date + Pagination)
+           ========================================== */
+        function updateAdminTable() {
+            const tbody = document.getElementById('adminTableBody');
+            const searchInput = document.getElementById('searchInput');
+            const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
+            
+            tbody.innerHTML = '';
+            
+            // A. Filtrer
+            const filteredReservations = reservations.filter(r => {
+                const matchRoom = r.room.toLowerCase().includes(searchTerm);
+                const matchReason = r.reason.toLowerCase().includes(searchTerm);
+                return matchRoom || matchReason;
+            });
+
+            // B. Trier (du plus récent au plus ancien)
+            filteredReservations.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            // C. Calculer la pagination
+            const totalPages = Math.ceil(filteredReservations.length / itemsPerPage) || 1;
+            if (currentPage > totalPages) currentPage = totalPages;
+
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const paginatedReservations = filteredReservations.slice(startIndex, startIndex + itemsPerPage);
+            
+            // D. Afficher les lignes
+            paginatedReservations.forEach(r => {
+                // Formatage de la date en français (ex: 23 octobre 2026)
+                const dateObj = new Date(r.date);
+                const optionsDate = { day: 'numeric', month: 'long', year: 'numeric' };
+                const dateFormatee = new Intl.DateTimeFormat('fr-FR', optionsDate).format(dateObj);
+
+                // Couleur du statut
+                let statusClass = '';
+                if(r.status === 'En attente') statusClass = 'status-attente';
+                else if (r.status === 'Confirmé') statusClass = 'status-confirme';
+                else statusClass = 'status-annule';
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${dateFormatee}</strong> <br> <small class="text-muted">${r.start} - ${r.end}</small></td>
+                    <td>${r.room}</td>
+                    <td>${r.projector || '-'}</td>
+                    <td>${r.reason}</td>
+                    <td class="${statusClass}">${r.status}</td>
+                    <td>
+                        ${r.status === 'En attente' ? `
+                            <button class="btn btn-sm btn-success me-1" onclick="updateStatus(${r.id}, 'Confirmé')">Valider</button>
+                            <button class="btn btn-sm btn-danger" onclick="updateStatus(${r.id}, 'Annulé')">Rejeter</button>
+                        ` : `
+                            <button class="btn btn-sm btn-outline-danger" onclick="deleteResa(${r.id})">Supprimer</button>
+                        `}
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            renderPagination(totalPages);
+            if (typeof updateChart === 'function') updateChart();
+        }
+
+        // MAJ Statut (Valider / Rejeter)
+        window.updateStatus = function(id, newStatus) {
+            const index = reservations.findIndex(r => r.id === id);
+            if (index > -1) {
+                reservations[index].status = newStatus;
+                saveData();
+            }
+        };
+
+        // Supprimer définitivement
+        window.deleteResa = function(id) {
+            if(confirm("Supprimer définitivement cette réservation ?")) {
+                reservations = reservations.filter(r => r.id !== id);
+                saveData();
+            }
+        };
+
+        /* ==========================================
+           5. PAGINATION LOGIQUE
+           ========================================== */
+        function renderPagination(totalPages) {
+            const paginationUl = document.getElementById('paginationControls');
+            if (!paginationUl) return;
+            
+            let html = `
+                <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                    <button class="page-link" onclick="changePage(${currentPage - 1})">Précédent</button>
+                </li>
+                <li class="page-item disabled">
+                    <span class="page-link text-dark bg-light">Page ${currentPage} sur ${totalPages}</span>
+                </li>
+                <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                    <button class="page-link" onclick="changePage(${currentPage + 1})">Suivant</button>
+                </li>
+            `;
+            paginationUl.innerHTML = html;
+        }
+
+        window.changePage = function(newPage) {
+            currentPage = newPage;
+            updateAdminTable();
+        };
+
+        /* ==========================================
+           6. GRAPHIQUE DES STATISTIQUES (Chart.js)
+           ========================================== */
+        function updateChart() {
+            const roomStats = {
+                'Amphi A': 0,
+                'Salle 101': 0,
+                'Salle Réunion': 0
+            };
+
+            reservations.forEach(r => {
+                if (r.status !== 'Annulé') {
+                    const startParts = r.start.split(':');
+                    const endParts = r.end.split(':');
+                    const startHours = parseInt(startParts[0]) + parseInt(startParts[1]) / 60;
+                    const endHours = parseInt(endParts[0]) + parseInt(endParts[1]) / 60;
+                    
+                    if (roomStats[r.room] !== undefined) {
+                        roomStats[r.room] += (endHours - startHours);
+                    }
+                }
+            });
+
+            const ctx = document.getElementById('occupancyChart');
+            if (!ctx) return;
+
+            if (occupancyChart) occupancyChart.destroy();
+
+            occupancyChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(roomStats),
+                    datasets: [{
+                        label: 'Heures réservées',
+                        data: Object.values(roomStats),
+                        backgroundColor: [
+                            'rgba(13, 110, 253, 0.8)', // Bleu (Amphi A)
+                            'rgba(25, 135, 84, 0.8)',  // Vert (Salle 101)
+                            'rgba(255, 193, 7, 0.8)'   // Jaune (Salle Réunion)
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'right' } }
+                }
+            });
+        }
+
+        /* ==========================================
+           7. EXPORTATION (CSV & PDF)
+           ========================================== */
+        window.exportCSV = function() {
+            if (reservations.length === 0) return alert("Aucune réservation à exporter.");
+            
+            let csvContent = "Date,Heure Debut,Heure Fin,Salle,Projecteur,Motif,Statut\n";
+            
+            reservations.forEach(r => {
+                const safeReason = r.reason.replace(/,/g, " ");
+                csvContent += `${r.date},${r.start},${r.end},${r.room},${r.projector || 'Aucun'},${safeReason},${r.status}\n`;
+            });
+            
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", "rapport_reservations.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        window.exportPDF = function() {
+            if (reservations.length === 0) return alert("Aucune réservation à exporter.");
+            
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            doc.text("Rapport des réservations (ResaPro)", 14, 15);
+            
+            const tableColumns = ["Date", "Horaires", "Salle", "Projecteur", "Motif", "Statut"];
+            const tableRows = reservations.map(r => [
+                r.date, `${r.start} - ${r.end}`, r.room, r.projector || '-', r.reason, r.status
+            ]);
+            
+            doc.autoTable({
+                head: [tableColumns],
+                body: tableRows,
+                startY: 20,
+                theme: 'striped',
+                styles: { fontSize: 10 },
+                headStyles: { fillColor: [13, 110, 253] }
+            });
+            
+            doc.save("rapport_reservations.pdf");
+        };
+
+        /* ==========================================
+           8. NAVIGATION (Vue Admin / Vue User)
+           ========================================== */
+        window.switchRole = function() {
+            const role = document.getElementById('roleSelector').value;
+            document.getElementById('userView').classList.remove('active');
+            document.getElementById('adminView').classList.remove('active');
+            
+            if (role === 'user') {
+                document.getElementById('userView').classList.add('active');
+                setTimeout(() => calendar.updateSize(), 100); 
+            } else {
+                document.getElementById('adminView').classList.add('active');
+            }
+        };
+    </script>
+</body>
+</html>
